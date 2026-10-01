@@ -12,9 +12,23 @@
  */
 
 CHIP PC {
-    IN in[16],load,inc,reset;
+    IN in[16], load, inc, reset;
     OUT out[16];
 
     PARTS:
-    // Put your code here:
+    // 1. Compute current value + 1
+    Inc16(in=out, out=outPlusOne);
+
+    // 2. Priority logic using Mux16:
+    // First priority: inc
+    Mux16(a=out, b=outPlusOne, sel=inc, out=outInc);
+
+    // Second priority: load
+    Mux16(a=outInc, b=in, sel=load, out=outLoad);
+
+    // Third priority: reset
+    Mux16(a=outLoad, b=false, sel=reset, out=nextValue);
+
+    // 3. Store the result in a Register
+    Register(in=nextValue, load=true, out=out);
 }
