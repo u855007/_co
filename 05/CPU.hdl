@@ -6,23 +6,23 @@
 /**
  * The Hack CPU (Central Processing unit), consisting of an ALU,
  * two registers named A and D, and a program counter named PC.
- * The CPU is designed to fetch and execute instructions written in 
+ * The CPU is designed to fetch and execute instructions written in
  * the Hack machine language. In particular, functions as follows:
- * Executes the inputted instruction according to the Hack machine 
+ * Executes the inputted instruction according to the Hack machine
  * language specification. The D and A in the language specification
  * refer to CPU-resident registers, while M refers to the external
- * memory location addressed by A, i.e. to Memory[A]. The inM input 
- * holds the value of this location. If the current instruction needs 
- * to write a value to M, the value is placed in outM, the address 
- * of the target location is placed in the addressM output, and the 
- * writeM control bit is asserted. (When writeM==0, any value may 
- * appear in outM). The outM and writeM outputs are combinational: 
- * they are affected instantaneously by the execution of the current 
- * instruction. The addressM and pc outputs are clocked: although they 
- * are affected by the execution of the current instruction, they commit 
- * to their new values only in the next time step. If reset==1 then the 
- * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
- * than to the address resulting from executing the current instruction. 
+ * memory location addressed by A, i.e. to Memory[A]. The inM input
+ * holds the value of this location. If the current instruction needs
+ * to write a value to M, the value is placed in outM, the address
+ * of the target location is placed in the addressM output, and the
+ * writeM control bit is asserted. (When writeM==0, any value may
+ * appear in outM). The outM and writeM outputs are combinational:
+ * they are affected instantaneously by the execution of the current
+ * instruction. The addressM and pc outputs are clocked: although they
+ * are affected by the execution of the current instruction, they commit
+ * to their new values only in the next time step. If reset==1 then the
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather
+ * than to the address resulting from executing the current instruction.
  */
 
 CHIP CPU {
@@ -34,10 +34,91 @@ CHIP CPU {
                          // the current program (reset==0).
 
     OUT outM[16],        // M value output
-        writeM,          // Write to M? 
+        writeM,          // Write to M?
         addressM[15],    // Address in data memory (of M)
         pc[15];          // address of next instruction
 
     PARTS:
-    // Put your code here:
+    // Instruction decoding
+    // instruction[15] == 0 -> A-instruction
+    // instruction[15] == 1 -> C-instruction
+    Not(in=instruction[15], out=isA);
+    Or(a=isA, b=false, out=isA); // ensure isA is treated as a boolean
+
+    // A-register
+    // Load A if isA == 1 or (isC == 1 and destA == 1)
+    // C-instruction dest bits: instruction[5], [4], [3]
+    // destination bits: 3=A, 4=D, 5=M
+    // Let's calculate loadA
+    // loadA = isA | (isC & destA)
+    And(a=instruction[15], b=instruction[5], out=destAM); // Actually destM is bit 5
+    // Wait, standard Hack: dest is [5][4][3], where 3=A, 4=D, 5=M
+    // Correction:
+    // instruction[5] -> destM
+    // instruction[4] -> destD
+    // instruction[3] -> destA
+
+    And(a=instruction[15], b=instruction[3], out=cDestA);
+    Or(a=isA, b=cDestA, out=loadA);
+
+    Mux16(a=ALUout, b=instruction[0..15], sel=isA, out=aIn);
+    ARegister(in=aIn, load=loadA, out=aOut, out[0..14]=addressM);
+
+    // D-register
+    // loadD = isC & destD
+    And(a=instruction[15], b=instruction[4], out=loadD);
+    DRegister(in=ALUout, load=loadD, out=dOut);
+
+    // ALU
+    // ALU inputs: D and (A or M)
+    // Mux between A and M based on a-instruction vs c-instruction and the 'a' bit of C-instr (instruction[12])
+    Mux16(a=aOut, b=inM, sel=instruction[12], out=aluB);
+
+    // ALU control bits from C-instruction: instruction[6..10] (actually bits 10, 9, 8, 7, 6)
+    // The ALU chip takes cx and cy.
+    // ALU(x, y, cx, cy, out=out, zr=zr, ng=ng)
+    ALU(x=dOut, y=aluB, cx=instruction[10], cy=instruction[9],
+        out=ALUout, out=outM, zr=zr, ng=ng);
+
+    // writeM: isC & destM
+    And(a=instruction[15], b=instruction[5], out=writeM);
+
+    // PC (Program Counter)
+    // jump logic:
+    // if isC:
+    //   if jump bits match (zr, ng), then pc = A (if jumpA) or pc = pc+1
+    // else:
+    //   pc = pc + 1
+
+    // Jump bits: instruction[2]=JGT, [1]=JEQ, [0]=JLT
+    // zr: ALU result is 0
+    // ng: ALU result is negative
+
+    // jmpL = jump[0] & (!zr | ng) -> This is wrong.
+    // Hack Jump conditions:
+    // JGT: (not zr) and (not ng)
+    // JEQ: zr
+    // JLT: ng
+
+    Not(in=zr, out=notZr);
+    Not(in=ng, out=notNg);
+    And(a=notZr, b=notNg, out=isPos); // isPos = !zr & !ng
+
+    // jump conditions
+    And(a=instruction[0], b=ng, out=jumpLT);
+    And(a=instruction[1], b=zr, out=jumpEQ);
+    And(a=instruction[2], b=isPos, out=jumpGT);
+
+    Or(a=jumpLT, b=jumpEQ, out=jumpLE);
+    Or(a=jumpLE, b=jumpGT, out=jumpAny);
+
+    // Final PC load condition:
+    // loadPC = isC & jumpAny
+    And(a=instruction[15], b=jumpAny, out=doJump);
+
+    // Jump destination: if jumpC (instruction[2] | instruction[1]), then jump to A
+    // Actually, in Hack, if any jump condition is met, it jumps to A.
+    // (The original Hack CPU specification says it jumps to A).
+
+    PC(in=aOut, load=doJump, reset=reset, out=pc);
 }
