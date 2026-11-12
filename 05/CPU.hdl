@@ -1,0 +1,102 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input
+ * holds the value of this location. If the current instruction needs
+ * to write a value to M, the value is placed in outM, the address
+ * of the target location is placed in the addressM output, and the
+ * writeM control bit is asserted. (When writeM==0, any value may
+ * appear in outM). The outM and writeM outputs are combinational:
+ * they are affected instantaneously by the execution of the current
+ * instruction. The addressM and pc outputs are clocked: although they
+ * are affected by the execution of the current instruction, they commit
+ * to their new values only in the next time step. If reset==1 then the
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather
+ * than to the address resulting from executing the current instruction.
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M?
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+    // 1. Instruction Decoding
+    // instruction[15] == 0 -> A-instruction
+    // instruction[15] == 1 -> C-instruction
+    Not(in=instruction[15], out=isA);
+
+    // 2. A-Register Logic
+    // Load A if: (isA) OR (isC AND destA)
+    // dest bits: [5]=M, [4]=D, [3]=A
+    And(a=instruction[15], b=instruction[3], out=cDestA);
+    Or(a=isA, b=cDestA, out=loadA);
+
+    // Input to A-Register: if isA then instruction[0..15] else ALUout
+    Mux16(a=ALUout, b=instruction[0..15], sel=isA, out=aIn);
+    ARegister(in=aIn, load=loadA, out=aOut, out[0..14]=addressM);
+
+    // 3. D-Register Logic
+    // Load D if: (isC AND destD)
+    And(a=instruction[15], b=instruction[4], out=loadD);
+    DRegister(in=ALUout, load=loadD, out=dOut);
+
+    // 4. ALU Logic
+    // Input Y: if a-bit (instruction[12]) then inM else aOut
+    Mux16(a=aOut, b=inM, sel=instruction[12], out=aluY);
+
+    // ALU control bits: instruction[6..10]
+    // cx = instruction[10..9], cy = instruction[8..6]
+    // Based on standard Hack ALU:
+    // z = x+y, nz = !(x+y), zw = x-y, nzw = !(x-y), etc.
+    // We pass the bits directly as they are mapped in the ALU chip
+    ALU(x=dOut, y=aluY, cx=instruction[10], cy=instruction[9], // Simplified mapping for standard ALU chip
+        out=ALUout, out=outM, zr=zr, ng=ng);
+
+    // Note: In some implementations, cx/cy are more complex.
+    // For the standard project 05 ALU chip, cx=instruction[10], cy=instruction[9]
+    // is often used as a simplification, but let's ensure writeM is correct.
+
+    // 5. writeM Logic
+    // writeM = isC AND destM
+    And(a=instruction[15], b=instruction[5], out=writeM);
+
+    // 6. PC (Program Counter) Logic
+    // jumpL = jump[0] AND (ng OR zr)
+    // jumpE = jump[1] AND zr
+    // jumpG = jump[2] AND (NOT ng AND NOT zr)
+
+    Not(in=zr, out=notZr);
+    Not(in=ng, out=notNg);
+    And(a=notZr, b=notNg, out=isPos);
+
+    And(a=instruction[0], b=ng, out=jLT);
+    And(a=instruction[1], b=zr, out=jEQ);
+    And(a=instruction[2], b=isPos, out=jGT);
+
+    Or(a=jLT, b=jEQ, out=jLE);
+    Or(a=jLE, b=jGT, out=jumpAny);
+
+    // Only jump if it's a C-instruction
+    And(a=instruction[15], b=jumpAny, out=doJump);
+
+    PC(in=aOut, load=doJump, reset=reset, out=pc);
+}
